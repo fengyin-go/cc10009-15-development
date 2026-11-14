@@ -68,7 +68,13 @@ npm run build
 - 字段、状态、动作与流转目标集中在 `frontend/src/data/modules.ts`；示例数据在
   `frontend/src/data/seed.ts`。
 - 状态流转只允许在 `local-service.ts` 里改，页面组件不做业务判断。
-- 想回到初始数据：清掉浏览器里 `scraper-config-studio:entries` 这一项，或调用 `resetModule(模块)`。
+- 增量采集的批次引擎在 `frontend/src/api/delta-service.ts`：同一游标启动幂等（并发只允许一个
+  运行中批次，重复请求回放首次决策，不产生第二个批次），批次提交成功才推进水位，失败保留上一
+  水位，水位归属以最后完整提交的批次为准；批次启动时快照增量字段、回退步数、批次大小，历史批次
+  按原值可查。批次与启动请求持久化在 `scraper-config-studio:delta-batches`，采集任务页会同步
+  显示运行中游标与本批起始位点，刷新或重新进入后仍是同一增量批次。
+- 想回到初始数据：清掉浏览器里 `scraper-config-studio:entries` 与
+  `scraper-config-studio:delta-batches` 这两项，或调用 `resetModule(模块)`。
 
 领域：数据工程
 子方向：数据采集、爬虫与RPA

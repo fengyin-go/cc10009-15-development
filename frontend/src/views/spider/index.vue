@@ -38,6 +38,8 @@
         <tr>
           <th v-for="column in columns" :key="column">{{ column }}</th>
           <th>当前状态</th>
+          <th>运行中游标</th>
+          <th>本批起始位点</th>
           <th>可执行动作</th>
         </tr>
       </thead>
@@ -45,6 +47,8 @@
         <tr v-for="row in rows" :key="String(row.id)">
           <td v-for="column in columns" :key="column">{{ row[column] ?? '—' }}</td>
           <td>{{ row.status }}</td>
+          <td>{{ deltaCursorOf(row) }}</td>
+          <td>{{ deltaStartOf(row) }}</td>
           <td class="row-actions">
             <button
               v-for="action in actions"
@@ -58,13 +62,13 @@
           </td>
         </tr>
         <tr v-if="!rows.length">
-          <td :colspan="columns.length + 2" class="empty-state">暂无采集任务数据，可先登记采集作业</td>
+          <td :colspan="columns.length + 4" class="empty-state">暂无采集任务数据，可先登记采集作业</td>
         </tr>
       </tbody>
     </table>
 
     <footer class="page-foot">
-      <span>共 {{ total }} 条采集任务记录</span>
+      <span>共 {{ total }} 条采集任务记录 · 增量联动批次 {{ deltaBatchCount }} 个运行中（刷新或重新进入后保持同一批次）</span>
       <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
     </footer>
   </section>
@@ -73,12 +77,14 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 
+import { runningBatchBySite } from '@/api/delta-service'
 import {
   downloadEntries,
   listEntries,
   moduleMeta,
   runAction as applyAction,
 } from '@/api/local-service'
+import type { DeltaBatch } from '@/data/delta-batches'
 import type { EntryRow } from '@/data/types'
 
 const meta = moduleMeta('spider')
@@ -92,12 +98,26 @@ const total = ref(0)
 const errorMessage = ref('')
 const filters = ref<Record<string, string>>({})
 const filterFields = columns.slice(0, 3)
+const deltaBySite = ref<Map<string, DeltaBatch>>(new Map())
+const deltaBatchCount = computed(() => deltaBySite.value.size)
 const statusSummary = computed(() =>
   statuses.map((status: string) => ({
     status,
     count: rows.value.filter((row) => String(row.status) === status).length,
   })),
 )
+
+function deltaBatchOf(row: EntryRow): DeltaBatch | undefined {
+  return deltaBySite.value.get(String(row['目标站点'] ?? ''))
+}
+
+function deltaCursorOf(row: EntryRow): string {
+  return deltaBatchOf(row)?.cursorCode ?? '—'
+}
+
+function deltaStartOf(row: EntryRow): string {
+  return deltaBatchOf(row)?.startWatermark ?? '—'
+}
 
 function resetFilters() {
   filters.value = {}
@@ -128,6 +148,7 @@ function reload() {
     const payload = listEntries(meta.key, filters.value)
     rows.value = payload.items
     total.value = payload.total
+    deltaBySite.value = runningBatchBySite()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '采集任务列表读取失败'
   }

@@ -63,6 +63,143 @@
       </tbody>
     </table>
 
+    <section class="panel-block">
+      <h3 class="section-title">增量批次</h3>
+      <p class="page-desc">
+        同一游标的启动是幂等操作：并发只允许一个运行中批次，重复请求回放首次决策，不产生第二个批次；
+        批次提交成功才推进水位，失败保留上一水位；水位归属以最后完整提交的批次为准。
+      </p>
+
+      <form class="filter-bar" @submit.prevent="startBatch">
+        <label class="filter-item">
+          <span>目标游标</span>
+          <select v-model="startForm.cursorId">
+            <option v-for="row in rows" :key="String(row.id)" :value="Number(row.id)">
+              {{ row['游标编号'] }} · {{ row['目标站点'] }}
+            </option>
+          </select>
+        </label>
+        <label class="filter-item">
+          <span>请求号（幂等键）</span>
+          <input v-model="startForm.requestId" placeholder="如 R-78" />
+        </label>
+        <label class="filter-item">
+          <span>重跑请求</span>
+          <input v-model="startForm.rerun" type="checkbox" />
+        </label>
+        <button class="btn primary" type="submit">启动增量批次</button>
+      </form>
+      <p v-if="panelMessage" :class="panelOk ? 'ok-text' : 'error-text'">{{ panelMessage }}</p>
+
+      <h4 class="section-subtitle">运行中批次</h4>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>批次编号</th>
+            <th>游标编号</th>
+            <th>目标站点</th>
+            <th>本批起始位点</th>
+            <th>启动时间</th>
+            <th>结束水位</th>
+            <th>成功条数</th>
+            <th>去重命中</th>
+            <th>失败原因</th>
+            <th>批次操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="batch in runningBatches" :key="batch.batchId">
+            <td>{{ batch.batchId }}</td>
+            <td>{{ batch.cursorCode }}</td>
+            <td>{{ batch.site }}</td>
+            <td>{{ batch.startWatermark }}</td>
+            <td>{{ batch.startedAt }}</td>
+            <td><input v-model="commitForms[batch.batchId].endWatermark" class="cell-input" /></td>
+            <td><input v-model.number="commitForms[batch.batchId].successCount" class="cell-input narrow" type="number" min="0" /></td>
+            <td><input v-model.number="commitForms[batch.batchId].dedupHits" class="cell-input narrow" type="number" min="0" /></td>
+            <td><input v-model="commitForms[batch.batchId].failReason" class="cell-input" placeholder="标记失败时填写" /></td>
+            <td class="row-actions">
+              <button class="link" type="button" @click="commitBatch(batch)">提交批次</button>
+              <button class="link" type="button" @click="failBatch(batch)">标记失败</button>
+            </td>
+          </tr>
+          <tr v-if="!runningBatches.length">
+            <td colspan="10" class="empty-state">当前没有运行中的增量批次</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h4 class="section-subtitle">批次历史</h4>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>批次编号</th>
+            <th>游标编号</th>
+            <th>目标站点</th>
+            <th>本批起始位点</th>
+            <th>结束水位</th>
+            <th>成功条数</th>
+            <th>去重窗口命中</th>
+            <th>增量字段</th>
+            <th>回退步数</th>
+            <th>批次大小</th>
+            <th>状态</th>
+            <th>水位归属</th>
+            <th>完成时间</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="batch in batchHistory" :key="batch.batchId">
+            <td>{{ batch.batchId }}</td>
+            <td>{{ batch.cursorCode }}</td>
+            <td>{{ batch.site }}</td>
+            <td>{{ batch.startWatermark }}</td>
+            <td>{{ batch.endWatermark || '—' }}</td>
+            <td>{{ batch.status === '已提交' ? batch.successCount : '—' }}</td>
+            <td>{{ batch.status === '已提交' ? batch.dedupHits : '—' }}</td>
+            <td>{{ batch.deltaField }}</td>
+            <td>{{ batch.backtrackSteps }}</td>
+            <td>{{ batch.batchSize }}</td>
+            <td>{{ batch.status }}</td>
+            <td>{{ ownerMark(batch) }}</td>
+            <td>{{ batch.finishedAt || '—' }}</td>
+          </tr>
+          <tr v-if="!batchHistory.length">
+            <td colspan="13" class="empty-state">暂无增量批次记录</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h4 class="section-subtitle">启动请求日志</h4>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>请求号</th>
+            <th>游标编号</th>
+            <th>请求类型</th>
+            <th>决策</th>
+            <th>关联批次</th>
+            <th>说明</th>
+            <th>时间</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="request in requestLog" :key="request.requestId">
+            <td>{{ request.requestId }}</td>
+            <td>{{ request.cursorCode }}</td>
+            <td>{{ request.rerun ? '重跑' : '常规' }}</td>
+            <td>{{ request.decision }}</td>
+            <td>{{ request.batchId || '—' }}</td>
+            <td>{{ request.reason || '—' }}</td>
+            <td>{{ request.createdAt }}</td>
+          </tr>
+          <tr v-if="!requestLog.length">
+            <td colspan="7" class="empty-state">暂无启动请求记录</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
     <footer class="page-foot">
       <span>共 {{ total }} 条增量采集记录</span>
       <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
@@ -74,11 +211,23 @@
 import { computed, onMounted, ref } from 'vue'
 
 import {
+  commitDeltaBatch,
+  defaultEndWatermark,
+  failDeltaBatch,
+  listDeltaBatches,
+  listDeltaRequests,
+  listRunningBatches,
+  nextRequestIdPreview,
+  startDeltaBatch,
+  watermarkOwner,
+} from '@/api/delta-service'
+import {
   downloadEntries,
   listEntries,
   moduleMeta,
   runAction as applyAction,
 } from '@/api/local-service'
+import type { DeltaBatch, DeltaStartRequest } from '@/data/delta-batches'
 import type { EntryRow } from '@/data/types'
 
 const meta = moduleMeta('delta')
@@ -99,6 +248,33 @@ const statusSummary = computed(() =>
   })),
 )
 
+type CommitForm = {
+  endWatermark: string
+  successCount: number
+  dedupHits: number
+  failReason: string
+}
+
+const runningBatches = ref<DeltaBatch[]>([])
+const batchHistory = ref<DeltaBatch[]>([])
+const requestLog = ref<DeltaStartRequest[]>([])
+const commitForms = ref<Record<string, CommitForm>>({})
+const startForm = ref({ cursorId: 1, requestId: '', rerun: false })
+const panelMessage = ref('')
+const panelOk = ref(false)
+
+function ownerMark(batch: DeltaBatch): string {
+  if (batch.status !== '已提交') {
+    return '—'
+  }
+  return watermarkOwner(batch.cursorId)?.batchId === batch.batchId ? '✓ 当前归属' : '—'
+}
+
+function showPanel(ok: boolean, message: string) {
+  panelOk.value = ok
+  panelMessage.value = message
+}
+
 function resetFilters() {
   filters.value = {}
   reload()
@@ -114,12 +290,71 @@ function openCreate() {
 
 function runAction(action: string, row: EntryRow) {
   errorMessage.value = ''
+  if (action === '启动增量') {
+    const result = startDeltaBatch(Number(row.id), nextRequestIdPreview(), false)
+    showPanel(result.ok, result.message)
+    refreshAll()
+    return
+  }
   const result = applyAction(meta.key, Number(row.id), action)
   if (!result.ok) {
     errorMessage.value = result.message
     return
   }
+  refreshAll()
+}
+
+function startBatch() {
+  const result = startDeltaBatch(
+    Number(startForm.value.cursorId),
+    startForm.value.requestId,
+    startForm.value.rerun,
+  )
+  showPanel(result.ok, result.message)
+  startForm.value.requestId = nextRequestIdPreview()
+  refreshAll()
+}
+
+function commitBatch(batch: DeltaBatch) {
+  const form = commitForms.value[batch.batchId]
+  const result = commitDeltaBatch(batch.batchId, {
+    successCount: Number(form?.successCount) || 0,
+    dedupHits: Number(form?.dedupHits) || 0,
+    endWatermark: form?.endWatermark ?? '',
+  })
+  showPanel(result.ok, result.message)
+  refreshAll()
+}
+
+function failBatch(batch: DeltaBatch) {
+  const form = commitForms.value[batch.batchId]
+  const result = failDeltaBatch(batch.batchId, form?.failReason ?? '')
+  showPanel(result.ok, result.message)
+  refreshAll()
+}
+
+function refreshAll() {
   reload()
+  reloadBatches()
+}
+
+function reloadBatches() {
+  runningBatches.value = listRunningBatches()
+  batchHistory.value = listDeltaBatches()
+  requestLog.value = listDeltaRequests()
+  const forms: Record<string, CommitForm> = {}
+  for (const batch of runningBatches.value) {
+    forms[batch.batchId] = commitForms.value[batch.batchId] ?? {
+      endWatermark: defaultEndWatermark(batch),
+      successCount: Number(batch.batchSize) || 0,
+      dedupHits: 0,
+      failReason: '',
+    }
+  }
+  commitForms.value = forms
+  if (!startForm.value.requestId) {
+    startForm.value.requestId = nextRequestIdPreview()
+  }
 }
 
 function reload() {
@@ -128,10 +363,13 @@ function reload() {
     const payload = listEntries(meta.key, filters.value)
     rows.value = payload.items
     total.value = payload.total
+    if (!rows.value.some((row) => Number(row.id) === Number(startForm.value.cursorId))) {
+      startForm.value.cursorId = Number(rows.value[0]?.id ?? 1)
+    }
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '增量采集列表读取失败'
   }
 }
 
-onMounted(reload)
+onMounted(refreshAll)
 </script>
